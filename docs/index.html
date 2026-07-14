@@ -151,9 +151,18 @@ const HEADERS = ["Paper ID / Paper Name", "Paper Title", "All Author Names", "Au
 const EMAIL_RE = /[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
 const EMAIL_FULL_RE = /^[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/;
 const GROUP_EMAIL_RE = /[{(\[]([^{}()\[\]@]{1,300})[})\]]\s*@\s*([A-Za-z0-9.\-]+\.[A-Za-z]{2,})/g;
-const ABSTRACT_RE = /^\s*(abstract|a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|keywords|index terms)\b/i;
-const AFFIL_RE = /\b(universit|institute|college|department|dept\.?|school of|faculty|laborator|academy|hospital|corporation|research center|centre|gmail|@|india|china|usa|engineering college|technolog)\b|\d{5,}/i;
-const NON_AUTHOR_RE = /\b(proceedings|conference|ieee|springer|elsevier|copyright|doi|issn|isbn|vol\.|volume|issue|journal|preprint|arxiv|received|accepted|published|corresponding author|www\.|http)\b/i;
+const ABSTRACT_RE = /^\W*(abstract|a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|keywords|index terms)\b/i;
+// word STEMS with \w* so "University", "Technology", "Laboratories" etc. all match
+const AFFIL_RE = /\b(universit|institut|college|department|dept|school|facult|laborator|academ|hospital|corporat|research|centre|center|gmail|technolog|engineer|manager|director|administrat|researcher|consultant|professor|lecturer|scientist|analyst|affiliation|location|assistant|associate|student|scholar|ltd|inc|llc|pvt|sciences)\w*\b|@|\d{5,}/i;
+const PLACE_RE = /\b(india|china|usa|u\.s\.a|united states|united kingdom|america|morocco|vietnam|viet nam|sri lanka|malaysia|indonesia|pakistan|bangladesh|nepal|saudi arabia|uae|oman|qatar|egypt|nigeria|kenya|ghana|south africa|ireland|germany|france|spain|italy|poland|romania|turkey|iran|iraq|jordan|canada|australia|japan|korea|singapore|thailand|philippines|brazil|mexico)\b/i;
+const COMPANY_RE = /\b(microsoft|google|amazon|ibm|meta|apple|oracle|sap|intel|nvidia|infosys|tcs|wipro|accenture|deloitte|capgemini|cognizant|software|solutions|technologies|consulting)\b/i;
+const ACRONYM_PAREN_RE = /\([A-Z][A-Z0-9&.\- ]{2,}\s*\)/;   // "(LARMIG)", "(UCLA)" -> affiliation marker
+const LABEL_RE = /\b(co[\s\-]?authors?|authors?|name|affiliation|correspondence|location|mail id|email)\s*:/i;
+const NON_AUTHOR_RE = /\b(proceedings|conference|ieee|springer|elsevier|copyright|doi|issn|isbn|vol\.|volume|issue|journal|preprint|arxiv|received|accepted|published|corresponding author|www\.|http|abstract)\b/i;
+
+function isAffiliationText(t) {
+  return AFFIL_RE.test(t) || PLACE_RE.test(t) || COMPANY_RE.test(t) || ACRONYM_PAREN_RE.test(t) || LABEL_RE.test(t);
+}
 
 let records = [];   // {file, title, authors[], emails[], error}
 const $ = id => document.getElementById(id);
@@ -169,7 +178,7 @@ async function pageLines(page) {
     const size = Math.hypot(it.transform[2], it.transform[3]);
     const y = view.height - it.transform[5];  // top-down
     const x = it.transform[4];
-    raw.push({ str, size, y, x });
+    raw.push({ str, size, y, x, w: it.width || 0 });
   }
   raw.sort((a, b) => (a.y - b.y) || (a.x - b.x));
   // group items into lines by y proximity
@@ -183,16 +192,32 @@ async function pageLines(page) {
       lines.push({ y: it.y, maxSize: it.size, parts: [it] });
     }
   }
-  return lines.map(l => ({
-    text: l.parts.sort((a, b) => a.x - b.x).map(p => p.str).join(' ')
-            .replace(/\s+/g, ' ').trim(),
-    size: Math.round(l.maxSize * 10) / 10,
-    y: l.y,
-  })).filter(l => l.text);
+  // join items gap-aware: tiny gap = same word (fixes "f rom", "H y brid"),
+  // normal gap = space, huge gap = column break -> separate segment
+  const tidy = s => s.replace(/\s+/g, ' ').trim();
+  return lines.map(l => {
+    const parts = l.parts.sort((a, b) => a.x - b.x);
+    const segs = [];
+    let cur = '';
+    for (let i = 0; i < parts.length; i++) {
+      const it = parts[i];
+      if (!cur) { cur = it.str; continue; }
+      const prev = parts[i - 1];
+      const em = Math.max(prev.size, it.size) || 10;
+      const gap = it.x - (prev.x + prev.w);
+      if (prev.w > 0 && gap > Math.max(16, em * 2)) { segs.push(cur); cur = it.str; }
+      else if (prev.w === 0 || gap > em * 0.13) cur += ' ' + it.str;
+      else cur += it.str;
+    }
+    if (cur) segs.push(cur);
+    const segments = segs.map(tidy).filter(Boolean);
+    return { text: segments.join(' '), segments, size: Math.round(l.maxSize * 10) / 10, y: l.y };
+  }).filter(l => l.text);
 }
 
 function extractTitle(lines, pageH) {
-  const top = lines.filter(l => l.y < pageH * 0.55 && l.text.length > 3 && !NON_AUTHOR_RE.test(l.text));
+  const top = lines.filter(l => l.y < pageH * 0.55 && l.text.length > 3 &&
+    !NON_AUTHOR_RE.test(l.text) && !LABEL_RE.test(l.text) && !l.text.includes('@'));
   if (!top.length) return { title: '', bottomY: null };
   const maxSize = Math.max(...top.map(l => l.size));
   const parts = [];
@@ -210,7 +235,7 @@ function extractTitle(lines, pageH) {
 function looksLikeAuthorLine(text) {
   if (text.length > 200 || NON_AUTHOR_RE.test(text)) return false;
   if (new RegExp(EMAIL_RE.source).test(text)) return false;
-  if (AFFIL_RE.test(text)) return false;
+  if (isAffiliationText(text)) return false;
   const words = text.match(/[A-Za-zÀ-ɏ][A-Za-zÀ-ɏ.'\-]*/g);
   if (!words || !words.length) return false;
   const low = new Set(['and', 'van', 'de', 'der', 'bin', 'al']);
@@ -219,29 +244,58 @@ function looksLikeAuthorLine(text) {
 }
 
 function splitAuthors(raw) {
-  raw = raw.replace(/[\*†‡§¶#]|\bby\b/gi, ' ').replace(/\s+/g, ' ');
+  raw = raw
+    .replace(/\[[^\]]*\]/g, ' ')                              // [0000-0003-...] ORCID blocks
+    .replace(/[¹²³⁴⁵⁶⁷⁸⁹⁰⁺\*†‡§¶#]/g, ' ')                    // superscript markers
+    .replace(/\b(co[\s\-]?authors?|authors?|name)\s*[:\-]\s*/gi, ' ')  // "Author:" labels
+    .replace(/\bby\b/gi, ' ')
+    .replace(/\s+/g, ' ');
   return raw.split(/,|;|\band\b|&/i)
-    .map(p => p.replace(/^\d+|\d+$/g, '').replace(/^[\s,;.]+|[\s,;.]+$/g, ''))
-    .filter(p => p.length >= 2 && /[A-Za-zÀ-ɏ]{2,}/.test(p));
+    .map(p => p.trim().replace(/^[\d\s]+|[\s\d]+$/g, '').replace(/^[\s,;.]+|[\s,;.]+$/g, '').trim())
+    .filter(p => p.length >= 2 && /[A-Za-zÀ-ɏ]{2,}/.test(p) &&
+                 !isAffiliationText(p) && !/^(dr|mr|ms|mrs|prof)\.?$/i.test(p));
 }
 
 function extractAuthors(lines, bottomY, pageH) {
   if (bottomY === null) return [];
   const out = [], seen = new Set();
-  let started = false;
+  const push = a => {
+    // merge names wrapped with a hyphen across lines ("Man-" + "ish Kumar")
+    if (out.length && /-$/.test(out[out.length - 1])) {
+      const merged = out[out.length - 1].replace(/-$/, '') + a;
+      seen.delete(out[out.length - 1].toLowerCase());
+      if (!seen.has(merged.toLowerCase())) { seen.add(merged.toLowerCase()); out[out.length - 1] = merged; }
+      else out.pop();
+      return;
+    }
+    const k = a.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(a); }
+  };
+  let started = false, stop = false;
   for (const l of lines) {
+    if (stop) break;
     if (l.y <= bottomY) continue;
     if (l.y > pageH * 0.75) break;
-    if (ABSTRACT_RE.test(l.text)) break;
-    if (looksLikeAuthorLine(l.text)) {
-      started = true;
-      for (const a of splitAuthors(l.text)) {
-        const k = a.toLowerCase();
-        if (!seen.has(k)) { seen.add(k); out.push(a); }
+    // evaluate each column segment independently (multi-column author blocks)
+    let anyAuthor = false;
+    for (let seg of l.segments) {
+      if (ABSTRACT_RE.test(seg)) { stop = true; break; }
+      // "Author: John Smith" / "Name: Jane" -> keep the name, drop the label
+      const m = seg.match(/^\W*(co[\s\-]?authors?|authors?|name)\s*:\s*(.+)$/i);
+      if (m) seg = m[2];
+      if (looksLikeAuthorLine(seg)) {
+        anyAuthor = true;
+        for (const a of splitAuthors(seg)) push(a);
       }
-    } else if (started && !AFFIL_RE.test(l.text) && l.text.length > 80) break;
+    }
+    if (anyAuthor) started = true;
+    else if (started && !isAffiliationText(l.text) && l.text.length > 80) break; // body text began
   }
-  return out;
+  // drop unfinished hyphen fragments and names that are a strict prefix of a
+  // longer name found later (repeated author blocks: "Dr. Suthir" vs "Dr. Suthir Sriram")
+  const cleaned = out.filter(a => !/-$/.test(a));
+  return cleaned.filter((a, i) => !cleaned.some((b, j) =>
+    j !== i && b.length > a.length && b.toLowerCase().startsWith(a.toLowerCase() + ' ')));
 }
 
 function extractEmails(text) {

@@ -33,18 +33,43 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{
 GROUP_EMAIL_RE = re.compile(r"[{(\[]([^{}()\[\]@]{1,300})[})\]]\s*@\s*([A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
 
 ABSTRACT_MARKERS = re.compile(
-    r"^\s*(abstract|a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|keywords|index terms)\b", re.I
+    r"^\W*(abstract|a\s*b\s*s\s*t\s*r\s*a\s*c\s*t|keywords|index terms)\b", re.I
 )
+# word STEMS with \w* so "University", "Technology", "Laboratories" etc. all match
 AFFILIATION_HINTS = re.compile(
-    r"\b(universit|institute|college|department|dept\.?|school of|faculty|laborator|"
-    r"academy|hospital|corporation|research center|centre|gmail|@|india|china|usa|"
-    r"engineering college|technolog)\b|\d{5,}", re.I
+    r"\b(universit|institut|college|department|dept|school|facult|laborator|"
+    r"academ|hospital|corporat|research|centre|center|gmail|technolog|engineer|"
+    r"manager|director|administrat|researcher|consultant|professor|lecturer|"
+    r"scientist|analyst|affiliation|location|assistant|associate|student|scholar|"
+    r"ltd|inc|llc|pvt|sciences)\w*\b|@|\d{5,}", re.I
+)
+PLACE_HINTS = re.compile(
+    r"\b(india|china|usa|u\.s\.a|united states|united kingdom|america|morocco|"
+    r"vietnam|viet nam|sri lanka|malaysia|indonesia|pakistan|bangladesh|nepal|"
+    r"saudi arabia|uae|oman|qatar|egypt|nigeria|kenya|ghana|south africa|ireland|"
+    r"germany|france|spain|italy|poland|romania|turkey|iran|iraq|jordan|canada|"
+    r"australia|japan|korea|singapore|thailand|philippines|brazil|mexico)\b", re.I
+)
+COMPANY_HINTS = re.compile(
+    r"\b(microsoft|google|amazon|ibm|meta|apple|oracle|sap|intel|nvidia|infosys|"
+    r"tcs|wipro|accenture|deloitte|capgemini|cognizant|software|solutions|"
+    r"technologies|consulting)\b", re.I
+)
+ACRONYM_PAREN = re.compile(r"\([A-Z][A-Z0-9&.\- ]{2,}\s*\)")  # "(LARMIG)", "(UCLA)"
+LABEL_LINE = re.compile(
+    r"\b(co[\s\-]?authors?|authors?|name|affiliation|correspondence|location|mail id|email)\s*:", re.I
 )
 NON_AUTHOR_LINE = re.compile(
     r"\b(proceedings|conference|ieee|springer|elsevier|copyright|doi|issn|isbn|"
     r"vol\.|volume|issue|journal|preprint|arxiv|received|accepted|published|"
-    r"corresponding author|www\.|http)\b", re.I
+    r"corresponding author|www\.|http|abstract)\b", re.I
 )
+
+
+def is_affiliation_text(t):
+    return bool(AFFILIATION_HINTS.search(t) or PLACE_HINTS.search(t)
+                or COMPANY_HINTS.search(t) or ACRONYM_PAREN.search(t)
+                or LABEL_LINE.search(t))
 
 
 def clean(s: str) -> str:
@@ -82,7 +107,8 @@ def extract_title(spans, page_height):
     """Title = the largest-font text in the upper part of page 1 (joined over
     consecutive lines of the same size)."""
     top = [s for s in spans if s["y"] < page_height * 0.55 and len(s["text"]) > 3
-           and not NON_AUTHOR_LINE.search(s["text"])]
+           and not NON_AUTHOR_LINE.search(s["text"])
+           and not LABEL_LINE.search(s["text"]) and "@" not in s["text"]]
     if not top:
         return "", None
     max_size = max(s["size"] for s in top)
@@ -106,7 +132,7 @@ def looks_like_author_line(text):
         return False
     if EMAIL_RE.search(text) or GROUP_EMAIL_RE.search(text):
         return False
-    if AFFILIATION_HINTS.search(text):
+    if is_affiliation_text(text):
         return False
     # authors: words that are mostly capitalized names, commas, 'and', initials
     letters = re.sub(r"[^A-Za-zÀ-ɏ]", "", text)
@@ -120,14 +146,20 @@ def looks_like_author_line(text):
 
 
 def split_authors(raw):
-    raw = re.sub(r"[\*†‡§¶#]|\d+(?=\s*[,$])|\bby\b", " ", raw, flags=re.I)
+    raw = re.sub(r"\[[^\]]*\]", " ", raw)                       # [0000-0003-...] ORCID
+    raw = re.sub(r"[¹²³⁴⁵⁶⁷⁸⁹⁰⁺\*†‡§¶#]", " ", raw)             # superscript markers
+    raw = re.sub(r"\b(co[\s\-]?authors?|authors?|name)\s*[:\-]\s*", " ", raw, flags=re.I)
+    raw = re.sub(r"\bby\b", " ", raw, flags=re.I)
     raw = re.sub(r"\s+", " ", raw)
-    parts = re.split(r",|;|\band\b|&", raw)
+    parts = re.split(r",|;|\band\b|&", raw, flags=re.I)
     out = []
     for p in parts:
+        p = p.strip()
+        p = re.sub(r"^[\d\s]+|[\s\d]+$", "", p)
         p = p.strip(" ,;.")
-        p = re.sub(r"^\d+|\d+$", "", p).strip()
-        if len(p) >= 2 and re.search(r"[A-Za-zÀ-ɏ]{2,}", p):
+        if (len(p) >= 2 and re.search(r"[A-Za-zÀ-ɏ]{2,}", p)
+                and not is_affiliation_text(p)
+                and not re.fullmatch(r"(dr|mr|ms|mrs|prof)\.?", p, re.I)):
             out.append(p)
     return out
 
@@ -136,26 +168,47 @@ def extract_authors(spans, title_bottom_y, page_height):
     """Author names usually sit between the title and the abstract/affiliations."""
     if title_bottom_y is None:
         return []
-    authors = []
+    seen, out = set(), []
+
+    def push(a):
+        # merge names wrapped with a hyphen across lines ("Man-" + "ish Kumar")
+        if out and out[-1].endswith("-"):
+            merged = out[-1][:-1] + a
+            seen.discard(out[-1].lower())
+            if merged.lower() not in seen:
+                seen.add(merged.lower())
+                out[-1] = merged
+            else:
+                out.pop()
+            return
+        if a.lower() not in seen:
+            seen.add(a.lower())
+            out.append(a)
+
+    started = False
     for s in spans:
         if s["y"] <= title_bottom_y:
             continue
         if s["y"] > page_height * 0.75:
             break
-        if ABSTRACT_MARKERS.match(s["text"]):
+        text = s["text"]
+        if ABSTRACT_MARKERS.match(text):
             break
-        if looks_like_author_line(s["text"]):
-            authors.extend(split_authors(s["text"]))
-        elif authors and AFFILIATION_HINTS.search(s["text"]) is None and len(s["text"]) > 80:
+        # "Author: John Smith" -> keep the name, drop the label
+        m = re.match(r"^\W*(co[\s\-]?authors?|authors?|name)\s*:\s*(.+)$", text, re.I)
+        if m:
+            text = m.group(2)
+        if looks_like_author_line(text):
+            started = True
+            for a in split_authors(text):
+                push(a)
+        elif started and not is_affiliation_text(text) and len(text) > 80:
             break  # body text started
-    # de-dup while preserving order
-    seen, out = set(), []
-    for a in authors:
-        key = a.lower()
-        if key not in seen:
-            seen.add(key)
-            out.append(a)
-    return out
+    # drop unfinished hyphen fragments and strict prefixes of longer names
+    cleaned = [a for a in out if not a.endswith("-")]
+    return [a for i, a in enumerate(cleaned)
+            if not any(j != i and b.lower().startswith(a.lower() + " ")
+                       for j, b in enumerate(cleaned))]
 
 
 def extract_emails(doc, max_pages=2):
