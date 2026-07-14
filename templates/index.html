@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research Paper Metadata Dashboard</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #ffffff; --ink: #1c2333; --muted: #6b7488;
+    --accent: #3956d8; --accent-soft: #e8edfd; --border: #e3e7ef;
+    --ok: #1e8e5a; --ok-soft: #e2f5ec; --warn: #b45309; --warn-soft: #fdf0dd;
+    --err: #c0392b; --err-soft: #fdeae7;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 18px 28px;
+           display: flex; align-items: center; gap: 14px; }
+  header .logo { width: 38px; height: 38px; border-radius: 10px; background: var(--accent);
+                 color: #fff; display: grid; place-items: center; font-size: 19px; }
+  header h1 { font-size: 18px; }
+  header p { font-size: 12.5px; color: var(--muted); }
+  main { max-width: 1200px; margin: 26px auto; padding: 0 20px; display: grid; gap: 20px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; }
+  .stat .num { font-size: 26px; font-weight: 650; }
+  .stat .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat.warn .num { color: var(--warn); }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
+  .card h2 { font-size: 15px; margin-bottom: 4px; }
+  .card .sub { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 30px 16px; text-align: center;
+          cursor: pointer; transition: .15s; font-size: 13.5px; color: var(--muted); }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .drop b { color: inherit; }
+
+  button { font: inherit; border: 0; border-radius: 9px; padding: 9px 16px; cursor: pointer; font-size: 13.5px; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--err); }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .toolbar .spacer { flex: 1; }
+  input[type=search] { font: inherit; padding: 8px 12px; border: 1px solid var(--border);
+                       border-radius: 9px; min-width: 220px; }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; background: #f8f9fc; color: var(--muted); font-weight: 600;
+       padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  td.mono { font-family: Consolas, monospace; font-size: 12.5px; white-space: nowrap; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 99px; font-size: 11.5px; font-weight: 600; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.err { background: var(--err-soft); color: var(--err); }
+  .del { color: var(--muted); cursor: pointer; border: 0; background: none; font-size: 15px; padding: 0 4px; }
+  .del:hover { color: var(--err); }
+
+  .issues { max-height: 320px; overflow-y: auto; display: grid; gap: 6px; }
+  .issue { font-size: 12.8px; background: var(--err-soft); color: var(--err);
+           border-radius: 8px; padding: 8px 12px; }
+  .allgood { font-size: 13px; background: var(--ok-soft); color: var(--ok); border-radius: 8px; padding: 10px 14px; }
+  .hint { font-size: 12.3px; color: var(--muted); margin-top: 10px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff;
+          border-top-color: transparent; border-radius: 50%; animation: r .7s linear infinite;
+          vertical-align: -2px; margin-right: 6px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .empty { text-align: center; color: var(--muted); font-size: 13px; padding: 34px 0; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">&#128196;</div>
+  <div>
+    <h1>Research Paper Metadata Dashboard</h1>
+    <p>Extract titles, authors &amp; emails from paper PDFs &rarr; Excel (one row per email)</p>
+  </div>
+</header>
+
+<main>
+  <div class="stats">
+    <div class="stat"><div class="num" id="stPapers">0</div><div class="lbl">Papers processed</div></div>
+    <div class="stat"><div class="num" id="stEmails">0</div><div class="lbl">Emails found</div></div>
+    <div class="stat"><div class="num" id="stRows">0</div><div class="lbl">Excel rows</div></div>
+    <div class="stat warn"><div class="num" id="stFlag">0</div><div class="lbl">Need review</div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>1 &middot; Extract from PDFs</h2>
+      <div class="sub">Drop research paper PDFs here. Each paper becomes one row per author email.</div>
+      <div class="drop" id="dropPdf">
+        <b>Drop PDF files here</b> or click to browse<br>
+        <span style="font-size:12px">multiple files supported</span>
+      </div>
+      <input type="file" id="filePdf" accept=".pdf" multiple hidden>
+      <div class="hint" id="pdfStatus"></div>
+    </div>
+
+    <div class="card">
+      <h2>2 &middot; Check an existing Excel sheet</h2>
+      <div class="sub">Upload a metadata .xlsx to find blank/invalid emails, duplicates and inconsistent rows.</div>
+      <div class="drop" id="dropXlsx">
+        <b>Drop an .xlsx here</b> or click to browse
+      </div>
+      <input type="file" id="fileXlsx" accept=".xlsx" hidden>
+      <div id="checkResult" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <h2 style="margin:0">Extracted metadata</h2>
+      <span class="spacer"></span>
+      <input type="search" id="search" placeholder="Filter by paper, author, email&hellip;">
+      <button class="btn-primary" id="btnDownload" disabled>&#11015; Download Excel</button>
+      <button class="btn-ghost" id="btnClear">Clear all</button>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th>Paper ID / Paper Name</th><th>Paper Title</th><th>All Author Names</th>
+          <th>Author Email</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody id="tbody"><tr><td colspan="6"><div class="empty">No papers yet &mdash; drop PDFs above to begin.</div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+let records = [];
+
+const $ = id => document.getElementById(id);
+
+function bindDrop(zone, input, onFiles) {
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { onFiles([...input.files]); input.value = ''; });
+  ['dragover','dragenter'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('over'); }));
+  ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('over'); }));
+  zone.addEventListener('drop', e => onFiles([...e.dataTransfer.files]));
+}
+
+// ---------- extraction ----------
+bindDrop($('dropPdf'), $('filePdf'), async files => {
+  const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
+  if (!pdfs.length) { $('pdfStatus').textContent = 'No PDF files in that selection.'; return; }
+  $('pdfStatus').innerHTML = '<span class="spin" style="border-color:var(--accent);border-top-color:transparent"></span>Extracting ' + pdfs.length + ' file(s)…';
+  const fd = new FormData();
+  pdfs.forEach(f => fd.append('pdfs', f));
+  try {
+    const r = await fetch('/api/extract', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    await refresh();
+    $('pdfStatus').textContent = 'Done — ' + pdfs.length + ' file(s) processed.';
+  } catch (e) { $('pdfStatus').textContent = 'Error: ' + e.message; }
+});
+
+async function refresh() {
+  const j = await (await fetch('/api/records')).json();
+  records = j.results;
+  render();
+}
+
+function statusFor(r) {
+  if (r.error) return ['err', r.error];
+  const miss = [];
+  if (!r.title) miss.push('no title');
+  if (!r.authors.length) miss.push('no authors');
+  if (!r.emails.length) miss.push('no emails');
+  return miss.length ? ['warn', miss.join(', ')] : ['ok', 'OK'];
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+
+function render() {
+  const q = $('search').value.toLowerCase();
+  const tb = $('tbody');
+  let rows = 0, emails = 0, flagged = 0, html = '';
+
+  records.forEach(r => {
+    const [cls, msg] = statusFor(r);
+    if (cls !== 'ok') flagged++;
+    emails += r.emails.length;
+    const emailRows = r.emails.length ? r.emails : [''];
+    const authors = r.authors.join(', ');
+    emailRows.forEach((em, i) => {
+      rows++;
+      const hay = (r.file + ' ' + r.title + ' ' + authors + ' ' + em).toLowerCase();
+      if (q && !hay.includes(q)) return;
+      html += '<tr>'
+        + '<td class="mono">' + esc(r.file) + '</td>'
+        + '<td>' + esc(r.title) + '</td>'
+        + '<td>' + esc(authors) + '</td>'
+        + '<td class="mono">' + (em ? esc(em) : '<span class="pill warn">blank</span>') + '</td>'
+        + '<td>' + (i === 0 ? '<span class="pill ' + cls + '">' + esc(msg) + '</span>' : '') + '</td>'
+        + '<td>' + (i === 0 ? '<button class="del" title="Remove paper" onclick="removePaper(\'' + encodeURIComponent(r.file) + '\')">&#10005;</button>' : '') + '</td>'
+        + '</tr>';
+    });
+  });
+
+  tb.innerHTML = html || '<tr><td colspan="6"><div class="empty">' +
+    (records.length ? 'No rows match the filter.' : 'No papers yet — drop PDFs above to begin.') + '</div></td></tr>';
+  $('stPapers').textContent = records.length;
+  $('stEmails').textContent = emails;
+  $('stRows').textContent = rows;
+  $('stFlag').textContent = flagged;
+  $('btnDownload').disabled = !records.length;
+}
+
+async function removePaper(encName) {
+  await fetch('/api/records/' + encName, { method: 'DELETE' });
+  refresh();
+}
+
+$('search').addEventListener('input', render);
+$('btnClear').addEventListener('click', async () => {
+  if (!records.length || !confirm('Remove all extracted papers from the dashboard?')) return;
+  await fetch('/api/clear', { method: 'POST' });
+  refresh();
+});
+$('btnDownload').addEventListener('click', () => { location.href = '/api/download'; });
+
+// ---------- excel check ----------
+bindDrop($('dropXlsx'), $('fileXlsx'), async files => {
+  const f = files.find(f => f.name.toLowerCase().endsWith('.xlsx'));
+  const out = $('checkResult');
+  if (!f) { out.innerHTML = '<div class="issue">Please choose an .xlsx file.</div>'; return; }
+  out.innerHTML = '<span class="spin" style="border-color:var(--accent);border-top-color:transparent"></span> Checking…';
+  const fd = new FormData(); fd.append('xlsx', f);
+  try {
+    const r = await fetch('/api/check', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    let h = '<div class="hint" style="margin:0 0 8px">' + esc(j.file) + ' — ' + j.rows + ' rows, ' + j.papers + ' papers</div>';
+    if (j.problems.length) {
+      h += '<div class="issues">' + j.problems.map(p => '<div class="issue">' + esc(p) + '</div>').join('') + '</div>';
+      h = '<div class="hint" style="margin:0 0 6px;color:var(--err)"><b>' + j.problems.length + ' issue(s) found</b></div>' + h;
+    } else {
+      h += '<div class="allgood">&#10003; No issues found. Sheet is clean.</div>';
+    }
+    out.innerHTML = h;
+  } catch (e) { out.innerHTML = '<div class="issue">' + esc(e.message) + '</div>'; }
+});
+
+refresh();
+</script>
+</body>
+</html>
